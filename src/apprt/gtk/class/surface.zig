@@ -2985,6 +2985,38 @@ pub const Surface = extern struct {
         }
     }
 
+    fn gcMouseUnpairedRelease(
+        gesture: *gtk.GestureClick,
+        _: f64,
+        _: f64,
+        button: c_uint,
+        _: ?*gdk.EventSequence,
+        self: *Self,
+    ) callconv(.c) void {
+        // GTK tracks only buttons 1-5 through modifier masks. Moving with an
+        // extra button held cancels the gesture, so its physical release arrives
+        // here instead of in gcMouseUp. Leave unpaired primary-button releases
+        // alone because they may belong to other gestures.
+        //
+        // https://docs.gtk.org/gtk4/signal.GestureClick.unpaired-release.html
+        if (button <= 5) return;
+
+        const event = gesture.as(gtk.EventController).getCurrentEvent() orelse return;
+        const surface = self.private().core_surface orelse return;
+        const mods = gtk_key.translateMods(event.getModifierState());
+
+        // getCurrentButton() has been reset by cancellation, so use the button
+        // supplied by the signal to clear the core's held-button state.
+        _ = surface.mouseButtonCallback(
+            .release,
+            translateMouseButton(button),
+            mods,
+        ) catch |err| {
+            log.warn("error in mouse release callback err={}", .{err});
+            return;
+        };
+    }
+
     fn ecMouseMotion(
         ec: *gtk.EventControllerMotion,
         x: f64,
@@ -3867,6 +3899,7 @@ pub const Surface = extern struct {
             class.bindTemplateCallback("key_released", &ecKeyReleased);
             class.bindTemplateCallback("mouse_down", &gcMouseDown);
             class.bindTemplateCallback("mouse_up", &gcMouseUp);
+            class.bindTemplateCallback("mouse_unpaired_release", &gcMouseUnpairedRelease);
             class.bindTemplateCallback("mouse_motion", &ecMouseMotion);
             class.bindTemplateCallback("mouse_leave", &ecMouseLeave);
             class.bindTemplateCallback("scroll_vertical", &ecMouseScrollVertical);
